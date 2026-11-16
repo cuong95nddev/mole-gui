@@ -1,0 +1,112 @@
+# Push a tag like v0.1.0 to build a universal, signed and notarized macOS DMG
+# and publish it as a GitHub release (the tag must match the VERSION file).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    # SwiftTerm needs Swift 6.2 (Xcode 26).
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Select Xcode 26+
+        run: |
+          xc=$(ls -d /Applications/Xcode_2[6-9]*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$xc" ] && sudo xcode-select -s "$xc"
+          swift --version
+      - name: Check tag matches VERSION
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          v=$(tr -d '[:space:]' < VERSION)
+          [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME != VERSION v$v"; exit 1; }
+      - name: Test
+        run: swift test
+      # Signing and notarization run only when the secrets are set (see README);
+      # without them a manual run builds an ad hoc signed app, and a tagged
+      # release fails rather than publish one.
+      - name: Import signing certificate and notary key
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          SIGN_ID: ${{ secrets.MACOS_SIGN_ID }}
+          NOTARY_KEY: ${{ secrets.NOTARY_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER }}
+        run: |
+          if [ -z "$CERT_P12" ] || [ -z "$NOTARY_KEY" ]; then
+            case "$GITHUB_REF" in
+              refs/tags/*) echo "::error::a release must be signed and notarized: set MACOS_CERT_P12 and NOTARY_KEY"; exit 1 ;;
+            esac
+            [ -n "$CERT_P12" ] || { echo "no signing secrets: ad hoc build"; exit 0; }
+          fi
+          KC="$RUNNER_TEMP/sign.keychain-db"
+          KC_PASS=$(openssl rand -hex 16)
+          security create-keychain -p "$KC_PASS" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KC_PASS" "$KC"
+          fail() { echo "::error::$1"; exit 1; }
+          printf '%s' "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12" 2>/dev/null ||
+            fail "MACOS_CERT_P12 isn't base64 (make it with: base64 -i cert.p12 | pbcopy)"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KC" -P "$CERT_PASSWORD" -T /usr/bin/codesign ||
+            fail "couldn't import MACOS_CERT_P12: MACOS_CERT_PASSWORD is wrong, or it isn't a .p12 with the private key"
+          rm "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KC_PASS" "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          ids=$(security find-identity -v -p codesigning "$KC")
+          printf '%s\n' "$ids" | grep -qF "\"$SIGN_ID\"" ||
+            fail "MACOS_SIGN_ID isn't an identity in MACOS_CERT_P12, which has: $(printf '%s' "$ids" | sed -n 's/.*"\(.*\)".*/\1/p' | paste -sd ';' -)"
+          echo "MOLEDESK_SIGN_ID=$SIGN_ID" >> "$GITHUB_ENV"
+          if [ -n "$NOTARY_KEY" ]; then
+            printf '%s' "$NOTARY_KEY" | base64 --decode > "$RUNNER_TEMP/notary.p8" 2>/dev/null ||
+              fail "NOTARY_KEY isn't base64 (make it with: base64 -i AuthKey_XXXX.p8 | pbcopy)"
+            grep -q "BEGIN PRIVATE KEY" "$RUNNER_TEMP/notary.p8" ||
+              fail "NOTARY_KEY isn't a .p8 key once decoded"
+            key_id=$(printf '%s' "$NOTARY_KEY_ID" | tr -d '[:space:]')
+            issuer=$(printf '%s' "$NOTARY_ISSUER" | tr -d '[:space:]')
+            xcrun notarytool store-credentials moledesk-notary --keychain "$KC" \
+              --key "$RUNNER_TEMP/notary.p8" --key-id "$key_id" ${issuer:+--issuer "$issuer"} ||
+              fail "Apple refused the notary key (NOTARY_KEY_ID is ${#key_id} characters, NOTARY_ISSUER ${#issuer}; a team key's ID is 10 and its issuer 36, an individual key has no issuer)"
+            rm "$RUNNER_TEMP/notary.p8"
+            echo "MOLEDESK_NOTARY_PROFILE=moledesk-notary" >> "$GITHUB_ENV"
+            echo "MOLEDESK_NOTARY_KEYCHAIN=$KC" >> "$GITHUB_ENV"
+          fi
+      - name: Build DMG
+        id: dmg
+        run: |
+          dmg=$(scripts/release.sh dist)
+          echo "path=$dmg" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: moledesk-macos
+          path: ${{ steps.dmg.outputs.path }}
+
+  publish:
+    needs: [macos]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: moledesk-*
+          merge-multiple: true
+          path: dist
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+        with:
+          files: dist/*.dmg
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          body: |
+            ## Install (macOS 14+, Apple Silicon and Intel)
+
+            1. Open the DMG and drag **MoleDesk** onto **Applications**.
+            2. Open it. If Mole isn't installed yet, the app walks you through `brew install mole`,
+               then asks for Full Disk Access.
