@@ -20,6 +20,8 @@ struct StatusSnapshot: Decodable {
     var batteries: [Battery]?
     var thermal: Thermal?
     var top_processes: [Proc]?
+    var bluetooth: [Bluetooth]?
+    var proxy: Proxy?
 
     struct Hardware: Decodable {
         var model: String?
@@ -36,6 +38,7 @@ struct StatusSnapshot: Decodable {
         var load5: Double?
         var load15: Double?
         var core_count: Int?
+        var logical_cpu: Int?
         var p_core_count: Int?
         var e_core_count: Int?
     }
@@ -96,6 +99,22 @@ struct StatusSnapshot: Decodable {
         var battery_temp: Double?
         var system_power: Double?
         var adapter_power: Double?
+        var gpu_temp: Double?
+        var fan_speed: Double?
+        var fan_count: Int?
+    }
+
+    struct Bluetooth: Decodable, Identifiable {
+        var name: String
+        var connected: Bool?
+        /// Mole reports e.g. "85%", or "" when unknown.
+        var battery: String?
+        var id: String { name }
+    }
+
+    struct Proxy: Decodable {
+        var enabled: Bool?
+        var type: String?
     }
 
     struct Proc: Decodable, Identifiable {

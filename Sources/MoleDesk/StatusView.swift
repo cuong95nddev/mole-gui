@@ -1,18 +1,39 @@
 import SwiftUI
 
+/// One `mo status --watch` stream shared by the overview pane and the menu bar panel.
+/// It runs while at least one of them is on screen.
 @Observable
 final class StatusModel {
     var snapshot: StatusSnapshot?
     var error: String?
+    /// Recent samples (oldest first) for the menu bar sparklines.
+    private(set) var cpuHistory: [Double] = []
+    private(set) var memHistory: [Double] = []
+    private(set) var gpuHistory: [Double] = []
+    private(set) var netHistory: [Double] = []
     private let stream = LineStream()
+    private var users = 0
+    static let historyLength = 40
 
-    func start() {
+    func acquire() {
+        users += 1
+        start()
+    }
+
+    func release() {
+        users = max(0, users - 1)
+        if users == 0 { stream.stop() }
+    }
+
+    private func start() {
         guard !stream.isRunning else { return }
         do {
             try stream.start(["status", "--watch", "--interval", "2s"], onLine: { [weak self] line in
                 guard let self, line.hasPrefix("{"), let data = line.data(using: .utf8) else { return }
                 do {
-                    self.snapshot = try JSONDecoder().decode(StatusSnapshot.self, from: data)
+                    let s = try JSONDecoder().decode(StatusSnapshot.self, from: data)
+                    self.snapshot = s
+                    self.record(s)
                     self.error = nil
                 } catch {
                     self.error = "Không đọc được dữ liệu trạng thái: \(error.localizedDescription)"
@@ -25,12 +46,28 @@ final class StatusModel {
         }
     }
 
-    func stop() { stream.stop() }
+    private func record(_ s: StatusSnapshot) {
+        func push(_ arr: inout [Double], _ v: Double) {
+            arr.append(v)
+            if arr.count > Self.historyLength { arr.removeFirst(arr.count - Self.historyLength) }
+        }
+        push(&cpuHistory, s.cpu?.usage ?? 0)
+        push(&memHistory, s.memory?.used_percent ?? 0)
+        push(&gpuHistory, max(0, s.gpu?.first?.usage ?? 0))
+        push(&netHistory, s.networkRate.rx + s.networkRate.tx)
+    }
+}
+
+extension StatusSnapshot {
+    /// Total receive/transmit over all interfaces, in MB/s.
+    var networkRate: (rx: Double, tx: Double) {
+        (network ?? []).reduce((0, 0)) { ($0.0 + ($1.rx_rate_mbs ?? 0), $0.1 + ($1.tx_rate_mbs ?? 0)) }
+    }
 }
 
 struct StatusView: View {
     @Environment(AppState.self) private var app
-    @State private var model = StatusModel()
+    private var model: StatusModel { app.status }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -67,8 +104,8 @@ struct StatusView: View {
                 Label("Mở bảng gốc", systemImage: "terminal")
             }
         }
-        .onAppear { model.start() }
-        .onDisappear { model.stop() }
+        .onAppear { model.acquire() }
+        .onDisappear { model.release() }
     }
 
     private var subtitle: String? {

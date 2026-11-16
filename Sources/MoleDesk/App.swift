@@ -7,7 +7,8 @@ struct MoleDeskApp: App {
     @State private var state = AppState()
 
     var body: some Scene {
-        WindowGroup("MoleDesk") {
+        // A single main window, so the menu bar panel can bring it back instead of opening another.
+        Window("MoleDesk", id: MainWindow.id) {
             ContentView()
                 .environment(state)
                 .frame(minWidth: 900, minHeight: 600)
@@ -16,6 +17,14 @@ struct MoleDeskApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {}
         }
+
+        MenuBarExtra {
+            MenuBarPanel()
+                .environment(state)
+        } label: {
+            Image(systemName: "gauge.with.dots.needle.67percent")
+        }
+        .menuBarExtraStyle(.window)
     }
 }
 
@@ -26,7 +35,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    /// Closing the main window keeps MoleDesk in the menu bar.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+}
+
+enum MainWindow {
+    static let id = "main"
 }
 
 enum Pane: String, CaseIterable, Identifiable {
@@ -66,6 +80,7 @@ final class AppState {
     let uninstall = UninstallModel()
     let analyze = AnalyzeModel()
     let history = HistoryModel()
+    let status = StatusModel()
     var hasFullDiskAccess = AppState.checkFullDiskAccess()
     var hasMole = AppState.moleInstalled()
     var brewPath = Mole.brewPath
@@ -130,7 +145,10 @@ struct ContentView: View {
     var body: some View {
         @Bindable var state = state
         Group {
-            if state.needsOnboarding {
+            if UserDefaults.standard.bool(forKey: "previewMenuBar") {
+                // `--args -previewMenuBar YES` shows the menu bar panel in the window (for screenshots).
+                MenuBarPanel().fixedSize()
+            } else if state.needsOnboarding {
                 OnboardingView()
             } else {
                 mainView

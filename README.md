@@ -3,7 +3,7 @@
 # MoleDesk
 
 A native macOS GUI for the free, open-source [Mole](https://github.com/tw93/Mole) CLI (`mo`):
-clean caches, uninstall apps with their leftovers, explore disk usage and watch system health.
+clean caches, uninstall apps with their leftovers, explore disk usage and watch system health, from the window or the menu bar.
 Not affiliated with Mole or its paid app. The interface is in Vietnamese.
 
 <p align="center"><img src="docs/images/clean.png" width="720" alt="Cleanup preview"></p>
@@ -27,6 +27,7 @@ Requires macOS 14 or later.
 | Dung lượng ổ đĩa (disk usage) | `mo analyze --json [PATH]` |
 | Công cụ khác (tools) | `mo optimize`, `purge`, `installer`, `slim`, `touchid`, `update` |
 | Lịch sử (history) | `mo history --json` |
+| Menu bar panel | the same `mo status` stream, shown from the menu bar icon; it runs only while the panel or the overview is open |
 
 Anything that deletes, needs sudo, or asks for confirmation runs inside an embedded terminal
 ([SwiftTerm](https://github.com/migueldeicaza/SwiftTerm)), so Mole's own previews, prompts and
@@ -48,7 +49,8 @@ finds one (hardened runtime), else ad hoc. A stable identity keeps the Full Disk
 across rebuilds.
 
 Testing hooks: `open build/MoleDesk.app --args -pane clean` (status|clean|uninstall|analyze|tools|history),
-`-analyze /some/path`, `-terminal "history"`, `-simulateMissingMole YES`, `-simulateNoFDA YES`.
+`-analyze /some/path`, `-terminal "history"`, `-simulateMissingMole YES`, `-simulateNoFDA YES`,
+`-previewMenuBar YES` (shows the menu bar panel in the main window).
 `scripts/shoot.sh PANE out.png` screenshots a pane. Icon: edit `Resources/icon.svg`, then `scripts/icon.sh`.
 
 ## Releasing
